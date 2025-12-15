@@ -452,70 +452,80 @@ $("dlDetailed").addEventListener("click", () => {
 
 /* ---------- User Inspector ---------- */
 $("btnInspect").addEventListener("click", () => {
-    if (!lastArtifacts) {
-        alert("Please run the simulation first.");
-        return;
-    }
+    try {
+        if (!lastArtifacts) {
+            alert("Please run the simulation first.");
+            return;
+        }
 
-    const uidInput = $("inspectUserId");
-    const uid = parseInt(uidInput.value, 10);
-    const users = parseInt($("numUsers").value, 10); // get current sim count (approx) or store it
+        const uidInput = $("inspectUserId");
+        const uid = parseInt(uidInput.value, 10);
+        const users = parseInt($("numUsers").value, 10); // get current sim count (approx) or store it
 
-    const errorDiv = $("inspectorError");
-    const resultsDiv = $("inspectorResults");
+        const errorDiv = $("inspectorError");
+        const resultsDiv = $("inspectorResults");
 
-    if (isNaN(uid) || uid < 1 || uid > users) {
-        errorDiv.textContent = `Invalid User ID. Please enter 1 to ${users}.`;
-        errorDiv.style.display = "block";
-        resultsDiv.style.display = "none";
-        return;
-    }
-    errorDiv.style.display = "none";
+        if (isNaN(uid) || uid < 1 || uid > users) {
+            errorDiv.textContent = `Invalid User ID. Please enter 1 to ${users}.`;
+            errorDiv.style.display = "block";
+            resultsDiv.style.display = "none";
+            return;
+        }
+        errorDiv.style.display = "none";
 
-    // Find sim data (we need to access 'sim' variable - but it's local to run click. 
-    // We need to attach 'history' to lastArtifacts or a global.
-    // Ideally, re-design: store 'currentSimulationResult' globally.
-    if (!lastArtifacts.simData) {
-        // We need to store this in rule above.
-        // Hotfix: Retriggering sim is bad. 
-        // I will update the runBtn listener to store `lastArtifacts.simData = sim;`
-        alert("Error: Simulation data not found. Please re-run.");
-        return;
-    }
+        // Find sim data (we need to access 'sim' variable - but it's local to run click. 
+        // We need to attach 'history' to lastArtifacts or a global.
+        // Ideally, re-design: store 'currentSimulationResult' globally.
+        if (!lastArtifacts.simData) {
+            // We need to store this in rule above.
+            // Hotfix: Retriggering sim is bad. 
+            // I will update the runBtn listener to store `lastArtifacts.simData = sim;`
+            alert("Error: Simulation data not found. Please re-run.");
+            return;
+        }
 
-    const userHistory = lastArtifacts.simData.history[uid - 1]; // 0-indexed
+        if (!lastArtifacts.simData.history) {
+            alert("Error: History data is missing from simulation. Please report this bug.");
+            return;
+        }
 
-    $("inspectorHeader").textContent = `User #${uid} History`;
-    const tbody = $("inspectorTable").querySelector("tbody");
-    tbody.innerHTML = "";
+        const userHistory = lastArtifacts.simData.history[uid - 1]; // 0-indexed
 
-    // userHistory is Array of Days (Array of Sessions)
-    userHistory.forEach(daySessions => {
-        daySessions.forEach(s => {
-            const tr = document.createElement("tr");
-            // Day, Time, Start, Rolls (implied by steps?), Steps, Items, End
-            const cols = [
-                s.day,
-                s.timestamp,
-                s.startPos,
-                "-", // Rolls not stored explicitly in history, just total steps. Can imply or ignore.
-                s.stepsGained,
-                s.items || "-",
-                s.endPos
-            ];
+        $("inspectorHeader").textContent = `User #${uid} History`;
+        const tbody = $("inspectorTable").querySelector("tbody");
+        tbody.innerHTML = "";
 
-            cols.forEach(c => {
-                const td = document.createElement("td");
-                td.textContent = c;
-                tr.appendChild(td);
+        // userHistory is Array of Days (Array of Sessions)
+        userHistory.forEach(daySessions => {
+            daySessions.forEach(s => {
+                const tr = document.createElement("tr");
+                // Day, Time, Start, Rolls (implied by steps?), Steps, Items, End
+                const cols = [
+                    s.day,
+                    s.timestamp,
+                    s.startPos,
+                    "-", // Rolls not stored explicitly in history, just total steps. Can imply or ignore.
+                    s.stepsGained,
+                    s.items || "-",
+                    s.endPos
+                ];
+
+                cols.forEach(c => {
+                    const td = document.createElement("td");
+                    td.textContent = c;
+                    tr.appendChild(td);
+                });
+
+                if (!s.played) {
+                    tr.style.opacity = "0.5"; // Dim skipped sessions
+                }
+                tbody.appendChild(tr);
             });
-
-            if (!s.played) {
-                tr.style.opacity = "0.5"; // Dim skipped sessions
-            }
-            tbody.appendChild(tr);
         });
-    });
 
-    resultsDiv.style.display = "block";
+        resultsDiv.style.display = "block";
+    } catch (err) {
+        console.error(err);
+        alert(`Inspector Error: ${err.message}`);
+    }
 });
