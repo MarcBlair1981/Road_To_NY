@@ -11,6 +11,8 @@
 <body>
   <header>
     <h1>🎲 Dice Boardgame — 30-Day Simulator (No Python Needed)</h1>
+    <p style="text-align: center; margin-bottom: 0;"><a href="segment.html"
+        style="color: #4cc9f0; text-decoration: none;">➔ Switch to Segment Analysis Mode</a></p>
   </header>
   <main>
     <div class="grid">
@@ -22,7 +24,7 @@
         </div>
         <div class="row">
           <label for="sessionsPerDay">Sessions per day</label>
-          <input id="sessionsPerDay" type="number" min="1" max="24" step="1" value="1" />
+          <input id="sessionsPerDay" type="number" min="1" max="24" step="1" value="3" />
         </div>
         <div class="row">
           <label for="numUsers">Expected number of users</label>
@@ -37,7 +39,7 @@
         </div>
         <div class="row">
           <label for="doubleSix">Double roll on six (explode)</label>
-          <input id="doubleSix" type="checkbox" checked />
+          <input id="doubleSix" type="checkbox" />
         </div>
         <div class="row">
           <label for="leaderboard">Show Day-30 leaderboard</label>
@@ -48,7 +50,7 @@
           <input id="seed" type="number" step="1" value="42" />
         </div>
         <div class="help">
-          Defaults: rolls/session=1, sessions/day=1, users=1000, participation=100%, explode=ON, leaderboard=ON,
+          Defaults: rolls/session=1, sessions/day=3, users=1000, participation=100%, explode=OFF, leaderboard=ON,
           seed=42.
         </div>
         <div class="actions" style="margin-top:10px;">

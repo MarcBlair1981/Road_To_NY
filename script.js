@@ -198,35 +198,91 @@ function formatTime(date) {
 }
 
 function simulate(params) {
-    const { users, sessionsPerDay, rollsPerSession, pPlay, explodeSix, seed } = params;
+    // Standard params are still used as baselines, but segment overrides might apply
+    const { users, sessionsPerDay, rollsPerSession, pPlay, seed, segmentData } = params;
     const rng = mulberry32((seed >>> 0) || 42);
+
+    /* ----------------------------------------------------
+       SEGMENT PREALLOCATION
+       If "segmentData" is provided {F2P: {}, ...}, assign each user a segment.
+       Otherwise, all users are "Standard".
+       ---------------------------------------------------- */
+    const userSegments = new Array(users); // stores the config object for each user
+    const PRIZE_POSITIONS = [10, 25, 40, 50, 60, 70, 80, 90, 100]; // Trigger positions
+
+    if (segmentData) {
+        const segKeys = Object.keys(segmentData);
+        // Normalize percentages to ensure they sum to 100 or handle leftovers
+        let assignedCount = 0;
+
+        // We'll deterministically assign the first X users to F2P, next Y to Spender etc.
+        // This is stable for the same 'users' count.
+        for (let i = 0; i < segKeys.length; i++) {
+            const key = segKeys[i];
+            const cfg = segmentData[key];
+            const percent = cfg.percent || 0;
+            const count = Math.floor(users * (percent / 100));
+
+            for (let k = 0; k < count; k++) {
+                if (assignedCount < users) {
+                    userSegments[assignedCount] = {
+                        name: cfg.label || key,
+                        extraRolls: cfg.extraRolls || 0,
+                        explode: cfg.explode || false,
+                        prizeCost: cfg.prizeCost || 0,
+                        accumulatedCost: 0
+                    };
+                    assignedCount++;
+                }
+            }
+        }
+        // Fill remainders with the last segment or a default if rounding errors occur
+        while (assignedCount < users) {
+            const lastKey = segKeys[segKeys.length - 1];
+            const cfg = segmentData[lastKey];
+            userSegments[assignedCount] = {
+                name: cfg.label || lastKey,
+                extraRolls: cfg.extraRolls || 0,
+                explode: cfg.explode || false,
+                prizeCost: cfg.prizeCost || 0,
+                accumulatedCost: 0
+            };
+            assignedCount++;
+        }
+    } else {
+        // Standard Mode: Everyone gets global params
+        for (let i = 0; i < users; i++) {
+            userSegments[i] = {
+                name: "Standard",
+                extraRolls: 0,
+                explode: params.explodeSix,
+                prizeCost: 0,
+                accumulatedCost: 0
+            };
+        }
+    }
 
     // Pre-allocate arrays for stats
     const positions = Array.from({ length: users }, () => new Array(DAYS).fill(0));
     const steps = new Array(users).fill(0);
-
-    const playedSessionsPerDay = Array.from({ length: users }, () => new Array(DAYS).fill(0));
-    const stepsGainedPerDay = Array.from({ length: users }, () => new Array(DAYS).fill(0));
-
-    // Detailed history: [userIndex][dayIndex] -> Array of Session Objects
-    // We use a flat structure or nested? Nested is easier for access by UserID.
     const history = Array.from({ length: users }, () => []);
 
+    // -------- SIMULATION LOOP --------
     for (let d = 0; d < DAYS; d++) {
-        // Base time for this day (e.g. 9 AM)
+        // Base time for this day
         const dayDate = new Date(SIM_START_DATE);
         dayDate.setDate(dayDate.getDate() + d);
 
         for (let u = 0; u < users; u++) {
             if (!history[u][d]) history[u][d] = [];
 
-            let daySteps = 0;
-            let playedCount = 0;
+            const seg = userSegments[u];
+            // Base rolls comes from global input, seg extra is added to that.
+            const userRollsPerSession = rollsPerSession + seg.extraRolls;
+            const userExplode = seg.explode;
 
             for (let s = 0; s < sessionsPerDay; s++) {
-                // Simulate session time: 9am + (s * 4 hours) + random jitter
-                const sessionTime = addHours(dayDate, (s * 4) + (rng() * 2)); // Spread sessions out
-
+                const sessionTime = addHours(dayDate, (s * 4) + (rng() * 2));
                 let played = false;
                 let sessionSteps = 0;
                 let startPos = steps[u];
@@ -234,10 +290,10 @@ function simulate(params) {
 
                 if (rng() < pPlay) {
                     played = true;
-                    playedCount++;
-                    sessionSteps = rollSession(rng, rollsPerSession, explodeSix);
+                    // Roll logic
+                    sessionSteps = rollSession(rng, userRollsPerSession, userExplode);
 
-                    // Item logic: 5% chance to find an item
+                    // Item logic (5% chance)
                     if (rng() < 0.05) {
                         const itemType = rng() < 0.5 ? "Mystery Box" : "Gold Coin";
                         itemsFound = itemType;
@@ -246,28 +302,59 @@ function simulate(params) {
 
                 steps[u] += sessionSteps;
 
-                // Record detailed session data
+                // CHECK PRIZES (Simulate "Landing" or "Passing"?)
+                // Usually board games trigger on land. Since we jump `sessionSteps`, 
+                // we technically "landed" on the final spot. 
+                // We'll check if the *end position* is in PRIZE_POSITIONS.
+                // NOTE: If they overshoot (e.g. from 9 to 12, skipping 10), they might miss it.
+                // For simplicity, let's assume "Landing" means ending the turn on that spot.
+                if (played && PRIZE_POSITIONS.includes(steps[u])) {
+                    seg.accumulatedCost += seg.prizeCost;
+                }
+
                 history[u][d].push({
                     day: d + 1,
-                    sessionIndex: s + 1,
                     timestamp: formatTime(sessionTime),
-                    startPos: startPos,
-                    endPos: steps[u],
+                    played,
+                    startPos,
                     stepsGained: sessionSteps,
-                    played: played,
+                    endPos: steps[u],
                     items: itemsFound
                 });
             }
-
-            daySteps = steps[u] - (d > 0 ? positions[u][d - 1] : 0); // Total gained today (simple diff) or track accum
-            // Actually we tracked cumulative steps in `steps[u]`, so we just set position
             positions[u][d] = steps[u];
-            playedSessionsPerDay[u][d] = playedCount;
-            stepsGainedPerDay[u][d] = stepsGainedPerDay[u][d] + (positions[u][d] - (d > 0 ? positions[u][d - 1] : 0)); // Re-calc pure gain
         }
     }
 
-    return { positions, playedSessionsPerDay, stepsGainedPerDay, history };
+    // -------- RESULTS AGGREGATION --------
+    const dayStats = {};
+    for (const d of MILESTONES) {
+        const idx = d - 1;
+        const posSlice = positions.map(p => p[idx]);
+        dayStats[d] = { ...meanStd(posSlice), ...quantiles(posSlice) };
+    }
+
+    // Segment Cost Stats
+    const segmentCosts = {};
+    if (segmentData) {
+        // Aggregation by segment name
+        for (let u = 0; u < users; u++) {
+            const seg = userSegments[u];
+            if (!segmentCosts[seg.name]) {
+                segmentCosts[seg.name] = { count: 0, totalCost: 0, distinctUsers: 0 };
+            }
+            segmentCosts[seg.name].count++;
+            segmentCosts[seg.name].totalCost += seg.accumulatedCost;
+        }
+    }
+
+    return {
+        positions,
+        dayStats,
+        history,
+        userSegments,
+        segmentCosts
+    };
 }
 
 /* ---------- UI wiring ---------- */
@@ -284,153 +371,221 @@ partVal.textContent = partSlider.value + "%";
 let lastArtifacts = null;
 
 runBtn.addEventListener("click", () => {
+    // Disable button to prevent double-click
     runBtn.disabled = true;
-    dlPosBtn.disabled = true; dlMilBtn.disabled = true; dlLbBtn.disabled = true;
-    if ($("dlDetailed")) $("dlDetailed").disabled = true;
+    $("stats").innerHTML = "Running...";
 
-    $("leaderboardCard").style.display = $("leaderboard").checked ? "block" : "none";
-    $("stats").innerHTML = "Running…";
+    // Allow UI to repaint (setTimeout)
+    setTimeout(() => {
+        try {
+            const t0 = performance.now();
 
-    try {
-        // read params
-        const rollsPerSession = Math.max(1, parseInt($("rollsPerSession").value || "1", 10));
-        const sessionsPerDay = Math.max(1, parseInt($("sessionsPerDay").value || "1", 10));
-        const users = Math.max(1, parseInt($("numUsers").value || "1000", 10));
-        const pPlay = Math.min(1, Math.max(0, parseInt(partSlider.value, 10) / 100));
-        const explodeSix = $("doubleSix").checked;
-        const leaderboard = $("leaderboard").checked;
-        const seed = parseInt($("seed").value || "42", 10) >>> 0;
+            // Gather params
+            const rollsPerSession = parseInt($("rollsPerSession").value, 10);
+            const sessionsPerDay = parseInt($("sessionsPerDay").value, 10);
+            const users = parseInt($("numUsers").value, 10);
+            const participation = parseInt($("participation").value, 10);
+            const seed = parseInt($("seed").value, 10);
 
-        const t0 = performance.now();
-        const sim = simulate({ users, sessionsPerDay, rollsPerSession, pPlay, explodeSix, seed });
-        const t1 = performance.now();
+            // "doubleSix" might be used if no segment config provided, but segment mode overrides it.
+            // standard mode still reads it.
+            const explodeSix = $("doubleSix").checked;
+            const leaderboard = $("leaderboard").checked;
 
-        // Build milestone stats & histograms
-        const statsDiv = $("stats");
-        statsDiv.innerHTML = "";
-        const table = document.createElement("table");
-        const header = document.createElement("tr");
-        ["Day", "Users", "Mean", "Std", "Min", "25%", "Median", "75%", "Max"].forEach(h => {
-            const th = document.createElement("th"); th.textContent = h; header.appendChild(th);
-        });
-        table.appendChild(header);
-
-        const milestoneRows = [];
-        const histTargets = { 7: "hist7", 14: "hist14", 21: "hist21", 30: "hist30" };
-        const countTargets = { 7: "count7", 14: "count14", 21: "count21", 30: "count30" };
-
-        for (const m of MILESTONES) {
-            const arr = sim.positions.map(p => p[m - 1]); // position at day m
-            const { mean, std } = meanStd(arr);
-            const { min, q1, med, q3, max } = quantiles(arr);
-
-            const tr = document.createElement("tr");
-            const cells = [m, users, mean.toFixed(2), std.toFixed(2), min, q1.toFixed(2), med.toFixed(2), q3.toFixed(2), max];
-            cells.forEach((c, i) => {
-                const td = document.createElement("td");
-                td.textContent = c;
-                if (i === 0 || i === 1) td.style.textAlign = "left";
-                tr.appendChild(td);
-            });
-            table.appendChild(tr);
-
-            milestoneRows.push({
-                day: m, users, mean: mean.toFixed(6), std: std.toFixed(6),
-                min, p25: q1.toFixed(6), median: med.toFixed(6), p75: q3.toFixed(6), max
-            });
-
-            // hist
-            const canvas = $(histTargets[m]);
-            drawHist(canvas, arr);
-            $(countTargets[m]).textContent = `${arr.length} users`;
-        }
-        statsDiv.appendChild(table);
-
-        // Leaderboard (day 30)
-        let leaderboardRows = [];
-        if (leaderboard) {
-            const day30 = sim.positions.map((p, i) => ({ user_id: i + 1, position: p[29] }));
-            day30.sort((a, b) => b.position - a.position);
-            leaderboardRows = day30.map((r, idx) => ({ rank: idx + 1, user_id: r.user_id, position: r.position }));
-            const boardDiv = $("board");
-            const tbl = document.createElement("table");
-            const h = document.createElement("tr");
-            ["Rank", "User", "Position"].forEach(t => { const th = document.createElement("th"); th.textContent = t; h.appendChild(th); });
-            tbl.appendChild(h);
-            leaderboardRows.slice(0, 20).forEach(r => {
-                const tr = document.createElement("tr");
-                const cols = [r.rank, r.user_id, r.position];
-                cols.forEach((c, i) => { const td = document.createElement("td"); td.textContent = c; if (i === 1) td.style.textAlign = "left"; tr.appendChild(td); });
-                tbl.appendChild(tr);
-            });
-            boardDiv.innerHTML = ""; boardDiv.appendChild(tbl);
-        }
-
-        // Build CSVs
-        const positionsRows = [];
-        for (let u = 0; u < users; u++) {
-            for (let d = 0; d < DAYS; d++) {
-                positionsRows.push({
-                    user_id: u + 1,
-                    day: d + 1,
-                    sessions_played: sim.playedSessionsPerDay[u][d],
-                    steps_gained: sim.stepsGainedPerDay[u][d],
-                    position: sim.positions[u][d],
-                });
+            // Check for Segment Data (Hidden Input)
+            let segmentData = null;
+            const segInput = $("segmentDataJSON");
+            if (segInput && segInput.value) {
+                try {
+                    segmentData = JSON.parse(segInput.value);
+                } catch (e) { console.warn("Invalid segment JSON, verifying standard mode"); }
             }
-        }
 
-        const csvPositions = toCSV(positionsRows, ["user_id", "day", "sessions_played", "steps_gained", "position"]);
-        const csvMilestones = toCSV(milestoneRows, ["day", "users", "mean", "std", "min", "p25", "median", "p75", "max"]);
-        const csvLeaderboard = toCSV(leaderboardRows, ["rank", "user_id", "position"]);
+            const pPlay = participation / 100.0;
 
-        // Detailed History CSV
-        const detailedRows = [];
-        // Flatten history for CSV
-        for (let u = 0; u < users; u++) {
-            for (let d = 0; d < DAYS; d++) {
-                const sessions = sim.history[u][d];
-                for (const s of sessions) {
-                    // Only log played sessions? Or all? Request implied "daily move", likely implies activity.
-                    if (!s.played) continue;
-                    detailedRows.push({
+            // Run Simulation
+            const sim = simulate({
+                users, sessionsPerDay, rollsPerSession,
+                pPlay, explodeSix, seed,
+                segmentData
+            });
+
+            const t1 = performance.now();
+
+            // -------- RENDER RESULTS --------
+
+            // 1. Quick Stats Table
+            let html = `<table><thead><tr>
+                <th>Day</th><th>Users</th><th>Mean</th><th>Std</th><th>Min</th><th>25%</th><th>Median</th><th>75%</th><th>Max</th>
+            </tr></thead><tbody>`;
+
+            for (const d of MILESTONES) {
+                const s = sim.dayStats[d];
+                html += `<tr>
+                    <td>${d}</td>
+                    <td>${users.toLocaleString()}</td>
+                    <td>${s.mean.toFixed(2)}</td>
+                    <td>${s.std.toFixed(2)}</td>
+                    <td>${s.min}</td>
+                    <td>${s.q1.toFixed(2)}</td>
+                    <td>${s.med.toFixed(2)}</td>
+                    <td>${s.q3.toFixed(2)}</td>
+                    <td>${s.max}</td>
+                </tr>`;
+            }
+            html += `</tbody></table>`;
+            $("stats").innerHTML = html;
+
+            // 2. Distributions
+            drawHist($("hist7"), sim.positions.map(p => p[6]));
+            drawHist($("hist14"), sim.positions.map(p => p[13]));
+            drawHist($("hist21"), sim.positions.map(p => p[20]));
+            drawHist($("hist30"), sim.positions.map(p => p[29]));
+
+            $("count7").textContent = `Mean: ${sim.dayStats[7].mean.toFixed(0)}`;
+            $("count14").textContent = `Mean: ${sim.dayStats[14].mean.toFixed(0)}`;
+            $("count21").textContent = `Mean: ${sim.dayStats[21].mean.toFixed(0)}`;
+            $("count30").textContent = `Mean: ${sim.dayStats[30].mean.toFixed(0)}`;
+
+            // 3. Cost Forecast (NEW)
+            const costDiv = $("costForecast");
+            if (costDiv) {
+                if (segmentData && sim.segmentCosts) {
+                    let costHtml = `<table style="width:100%"><thead><tr>
+                        <th>Segment</th><th>Users</th><th>Total Prize Cost</th><th>Avg $/User</th>
+                    </tr></thead><tbody>`;
+
+                    let grandTotal = 0;
+
+                    Object.keys(sim.segmentCosts).forEach(segName => {
+                        const data = sim.segmentCosts[segName];
+                        grandTotal += data.totalCost;
+                        costHtml += `<tr>
+                            <td>${segName}</td>
+                            <td>${data.count.toLocaleString()}</td>
+                            <td>$${data.totalCost.toLocaleString()}</td>
+                            <td>$${(data.totalCost / (data.count || 1)).toFixed(2)}</td>
+                        </tr>`;
+                    });
+
+                    costHtml += `<tr style="font-weight:bold; background:#2d3748">
+                        <td>TOTAL</td>
+                        <td>${users.toLocaleString()}</td>
+                        <td>$${grandTotal.toLocaleString()}</td>
+                        <td>$${(grandTotal / users).toFixed(2)}</td>
+                    </tr>`;
+
+                    costHtml += `</tbody></table>`;
+                    costDiv.innerHTML = costHtml;
+                } else {
+                    costDiv.innerHTML = "<p class='help'>Cost forecast available only in Segment Mode.</p>";
+                }
+            }
+
+            // 4. Leaderboard
+            const boardDiv = $("board");
+            const boardCard = $("leaderboardCard");
+            if (leaderboard) {
+                boardCard.style.display = "block";
+                const finalPositions = sim.positions.map((history, idx) => ({ id: idx + 1, score: history[DAYS - 1], seg: sim.userSegments[idx].name }));
+                // Sort descending
+                finalPositions.sort((a, b) => b.score - a.score);
+                const top20 = finalPositions.slice(0, 20);
+
+                let lbHtml = `<table><thead><tr><th>Rank</th><th>User ID</th><th>Segment</th><th>Position</th></tr></thead><tbody>`;
+                top20.forEach((r, i) => {
+                    lbHtml += `<tr><td>${i + 1}</td><td>#${r.id}</td><td>${r.seg}</td><td>${r.score}</td></tr>`;
+                });
+                lbHtml += `</tbody></table>`;
+                boardDiv.innerHTML = lbHtml;
+            } else {
+                boardCard.style.display = "none";
+            }
+
+            // 5. Generate CSV Data
+            // Positions CSV
+            const positionsRows = [];
+            for (let u = 0; u < users; u++) {
+                for (let d = 0; d < DAYS; d++) {
+                    // This is getting huge for 1M users, maybe skip if > 50k?
+                    // For now, keep it simple.
+                    positionsRows.push({
                         user_id: u + 1,
-                        day: s.day,
-                        time: s.timestamp,
-                        start_pos: s.startPos,
-                        steps_gained: s.stepsGained,
-                        end_pos: s.endPos,
-                        items: s.items
+                        segment: sim.userSegments[u].name,
+                        day: d + 1,
+                        position: sim.positions[u][d]
                     });
                 }
             }
+
+            // Create CSVs
+            const csvPositions = toCSV(positionsRows, ["user_id", "segment", "day", "position"]);
+
+            // Milestones CSV
+            const milestoneRows = [];
+            for (const d of MILESTONES) {
+                const s = sim.dayStats[d];
+                milestoneRows.push({ day: d, users, ...s });
+            }
+            const csvMilestones = toCSV(milestoneRows, ["day", "users", "mean", "std", "min", "p25", "median", "p75", "max"]);
+
+            // Leaderboard CSV
+            const allFinal = sim.positions.map((h, i) => ({ id: i + 1, score: h[DAYS - 1], seg: sim.userSegments[i].name }));
+            allFinal.sort((a, b) => b.score - a.score);
+            const leaderboardRows = allFinal.map((r, i) => ({ rank: i + 1, user_id: r.id, segment: r.seg, position: r.score }));
+            const csvLeaderboard = toCSV(leaderboardRows, ["rank", "user_id", "segment", "position"]);
+
+            // Detailed CSV
+            const detailedRows = [];
+            // Optimization: If users > 10,000, maybe don't gen this by default?
+            if (users <= 10000) {
+                for (let u = 0; u < users; u++) {
+                    for (let d = 0; d < DAYS; d++) {
+                        const sessions = sim.history[u][d];
+                        for (const s of sessions) {
+                            if (!s.played) continue;
+                            detailedRows.push({
+                                user_id: u + 1,
+                                segment: sim.userSegments[u].name,
+                                day: s.day,
+                                time: s.timestamp,
+                                start_pos: s.startPos,
+                                steps_gained: s.stepsGained,
+                                end_pos: s.endPos,
+                                items: s.items
+                            });
+                        }
+                    }
+                }
+            }
+            const csvDetailed = toCSV(detailedRows, ["user_id", "segment", "day", "time", "start_pos", "steps_gained", "end_pos", "items"]);
+
+            lastArtifacts = {
+                simData: sim,
+                csvPositions, csvMilestones, csvLeaderboard, csvDetailed,
+                filenameTag: `u${users}_seg${segmentData ? 'Mixed' : 'Std'}`
+            };
+
+            // Enable buttons
+            dlPosBtn.disabled = false;
+            dlMilBtn.disabled = false;
+            dlLbBtn.disabled = !leaderboard;
+            if ($("dlDetailed")) $("dlDetailed").disabled = false;
+
+            // Time note
+            const ms = (t1 - t0).toFixed(0);
+            const note = document.createElement("div");
+            note.className = "help";
+            note.innerHTML = `Simulated <span class="mono">${users.toLocaleString()}</span> users (${segmentData ? 'Mixed Segments' : 'Standard'}) × 30 days in <span class="nowrap">${ms} ms</span>.`;
+            $("stats").appendChild(note);
+
+        } catch (err) {
+            console.error(err);
+            $("stats").innerHTML += `<div style="color:red; margin-top:10px;">Error: ${err.message}</div>`;
+        } finally {
+            runBtn.disabled = false;
         }
-        const csvDetailed = toCSV(detailedRows, ["user_id", "day", "time", "start_pos", "steps_gained", "items", "end_pos"]);
-
-        lastArtifacts = {
-            simData: sim,
-            csvPositions, csvMilestones, csvLeaderboard, csvDetailed,
-            filenameTag: `u${users}_k${sessionsPerDay}_r${rollsPerSession}_p${Math.round(pPlay * 100)}_x${explodeSix ? 1 : 0}_seed${seed}`
-        };
-
-        // enable downloads
-        dlPosBtn.disabled = false; dlMilBtn.disabled = false; dlLbBtn.disabled = !leaderboard;
-        if ($("dlDetailed")) $("dlDetailed").disabled = false;
-        $("maxUserLabel").textContent = users;
-
-        const ms = (t1 - t0).toFixed(0);
-        const note = document.createElement("div");
-        note.className = "help";
-        note.innerHTML = `Simulated <span class="mono">${users.toLocaleString()}</span> users × 30 days in <span class="nowrap">${ms} ms</span>.`;
-        statsDiv.appendChild(note);
-
-    } catch (err) {
-        console.error(err);
-        $("stats").innerHTML += `<div style="color:red; margin-top:10px;">Error: ${err.message}</div>`;
-        alert("An error occurred during simulation. check parameters.");
-    } finally {
-        runBtn.disabled = false;
-    }
+    }, 50); // small delay for UI
 });
 
 dlPosBtn.addEventListener("click", () => {

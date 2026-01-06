@@ -1,0 +1,414 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Dice Boardgame — 30-Day Simulator (Segment View)</title>
+    <link rel="stylesheet" href="style.css" />
+</head>
+
+<body>
+    <header>
+        <h1>🎲 Dice Boardgame — 30-Day Simulator (Segment View)</h1>
+        <p style="text-align: center; margin-bottom: 0;"><a href="index.html"
+                style="color: #4cc9f0; text-decoration: none;">➔ Back to Standard Mode</a></p>
+    </header>
+    <main>
+        <div class="grid">
+            <!-- ==== INPUTS CARD ==== -->
+            <section class="card">
+                <h2 style="margin-top:0;">Inputs</h2>
+
+                <!-- Rolls per session -->
+                <div class="row">
+                    <label for="rollsPerSession"># rolls per session</label>
+                    <input id="rollsPerSession" type="number" min="1" max="10" step="1" value="1" />
+                </div>
+
+                <!-- Sessions per day -->
+                <div class="row">
+                    <label for="sessionsPerDay">Sessions per day</label>
+                    <input id="sessionsPerDay" type="number" min="1" max="24" step="1" value="3" />
+                </div>
+
+                <!-- Users -->
+                <div class="row">
+                    <label for="numUsers">Expected number of users</label>
+                    <input id="numUsers" type="number" min="10" max="1000000" step="10" value="1000" />
+                </div>
+
+                <!-- Participation -->
+                <div class="row">
+                    <label for="participation">Daily participation per session (%)</label>
+                    <div class="flex">
+                        <input id="participation" type="range" min="0" max="100" step="1" value="100" />
+                        <span id="partVal" class="pill">100%</span>
+                    </div>
+                </div>
+
+                <!-- Explode checkbox (will be overwritten by segment) -->
+                <div class="row">
+                    <label for="doubleSix">Double roll on six (explode)</label>
+                    <input id="doubleSix" type="checkbox" />
+                </div>
+
+                <!-- Leaderboard -->
+                <div class="row">
+                    <label for="leaderboard">Show Day-30 leaderboard</label>
+                    <input id="leaderboard" type="checkbox" checked />
+                </div>
+
+                <!-- Seed -->
+                <div class="row">
+                    <label for="seed">Simulation Variant</label>
+                    <input id="seed" type="number" step="1" value="42" />
+                </div>
+
+                <!-- ==== SEGMENT CONFIGURATION ==== -->
+                <input type="hidden" id="segmentDataJSON" />
+
+                <!-- ==== EDITABLE SEGMENT SETTINGS ==== -->
+                <div class="row" style="margin-top:12px;">
+                    <label>Segment Settings (editable)</label>
+                </div>
+                <div class="row" id="segmentConfigEditor"></div>
+
+                <!-- Help line (shows current defaults) -->
+                <div class="help">
+                    Defaults: rolls/session=1, sessions/day=3, users=1000, participation=100%, explode=OFF,
+                    leaderboard=ON, seed=42.
+                </div>
+
+                <!-- Action buttons -->
+                <div class="actions" style="margin-top:10px;">
+                    <button id="run" class="primary">Run Simulation (30 days)</button>
+                    <button id="saveDefaults" class="secondary">Save as defaults</button>
+                    <button id="resetDefaults" class="secondary" style="background-color:#4a5568;">Reset to
+                        Factory</button>
+                    <button id="dlPositions" disabled>Download positions.csv</button>
+                    <button id="dlMilestones" disabled>Download milestones.csv</button>
+                    <button id="dlLeaderboard" disabled>Download leaderboard.csv</button>
+                    <button id="dlDetailed" disabled>Download detailed_history.csv</button>
+                </div>
+            </section>
+
+            <!-- ==== QUICK STATS ==== -->
+            <section class="card">
+                <h2 style="margin-top:0;">Quick Stats</h2>
+                <div id="stats"></div>
+                <div class="help">We show mean, std, min, quartiles, max for days 7/14/21/30 across users.</div>
+            </section>
+        </div>
+
+        <!-- ==== DISTRIBUTIONS ==== -->
+        <section class="card" style="margin-top:16px;">
+            <h2 style="margin-top:0;">Distributions (Positions after D days)</h2>
+            <div class="grid">
+                <div>
+                    <div class="flex"><span class="pill">Day 7</span><span id="count7" class="pill"></span></div>
+                    <canvas id="hist7" width="520" height="240"></canvas>
+                </div>
+                <div>
+                    <div class="flex"><span class="pill">Day 14</span><span id="count14" class="pill"></span></div>
+                    <canvas id="hist14" width="520" height="240"></canvas>
+                </div>
+                <div>
+                    <div class="flex"><span class="pill">Day 21</span><span id="count21" class="pill"></span></div>
+                    <canvas id="hist21" width="520" height="240"></canvas>
+                </div>
+                <div>
+                    <div class="flex"><span class="pill">Day 30</span><span id="count30" class="pill"></span></div>
+                    <canvas id="hist30" width="520" height="240"></canvas>
+                </div>
+            </div>
+        </section>
+
+        <!-- ==== USER INSPECTOR ==== -->
+        <section class="card" style="margin-top:16px;">
+            <h2 style="margin-top:0;">User Inspector</h2>
+            <div class="row" style="max-width: 400px;">
+                <label for="inspectUserId">User ID (1 - <span id="maxUserLabel">1000</span>)</label>
+                <div class="flex">
+                    <input id="inspectUserId" type="number" min="1" step="1" placeholder="e.g. 42" />
+                    <button id="btnInspect">Lookup</button>
+                </div>
+            </div>
+            <div id="inspectorError" style="color:#ff6b6b; margin-bottom:10px; display:none;"></div>
+            <div id="inspectorResults" style="display:none;">
+                <h3 id="inspectorHeader" style="margin-bottom:8px;">User #42 History</h3>
+                <div style="max-height: 400px; overflow-y: auto; border: 1px solid #243047; border-radius: 10px;">
+                    <table id="inspectorTable" style="margin-top:0;">
+                        <thead style="position:sticky; top:0;">
+                            <tr>
+                                <th>Day</th>
+                                <th>Time</th>
+                                <th>Start Pos</th>
+                                <th>Rolls</th>
+                                <th>Steps</th>
+                                <th>Items</th>
+                                <th>End Pos</th>
+                            </tr>
+                        </thead>
+                        <tbody></tbody>
+                    </table>
+                </div>
+            </div>
+        </section>
+
+        <!-- ==== LEADERBOARD ==== -->
+        <section class="card" id="leaderboardCard" style="margin-top:16px; display:none;">
+            <h2 style="margin-top:0;">Leaderboard — Day 30 (Top 20)</h2>
+            <div id="board"></div>
+        </section>
+
+        <!-- ==== COST FORECAST CARD ==== -->
+        <section class="card" style="margin-top:16px;">
+            <h2 style="margin-top:0;">Cost Forecast</h2>
+            <div id="costForecast"></div>
+            <div class="help">
+                Shows the accumulated prize cost for each segment based on the configured prize positions and
+                per‑segment cost values.
+            </div>
+        </section>
+
+        <div class="footer">
+            Method: sessions/day × participation × (sum of dice per session), accumulated across days. Exploding‑six
+            increases mean and variance.
+        </div>
+    </main>
+
+    <script src="script.js"></script>
+
+    <!-- ==== SEGMENT LOGIC (editable, persisted, dynamic) ==== -->
+    <script>
+        /* -------------------------------------------------
+           Default segment configuration (editable)
+           ------------------------------------------------- */
+        const DEFAULT_SEGMENT_CONFIG = {
+            F2P: {
+                label: 'F2P',
+                percent: 60,
+                extraRolls: 0,
+                explode: false,
+                prizeCost: 5
+            },
+            Spender: {
+                label: 'Spender',
+                percent: 30,
+                extraRolls: 1,
+                explode: true,
+                prizeCost: 10
+            },
+            VIP: {
+                label: 'VIP',
+                percent: 10,
+                extraRolls: 2,
+                explode: true,
+                prizeCost: 20
+            }
+        };
+
+        /* -------------------------------------------------
+           Load config from localStorage (or fall back)
+           ------------------------------------------------- */
+        function loadSegmentConfig() {
+            const stored = localStorage.getItem('segmentConfig');
+            return stored ? JSON.parse(stored) : DEFAULT_SEGMENT_CONFIG;
+        }
+        let SEGMENT_CONFIG = loadSegmentConfig();
+
+        /* -------------------------------------------------
+           Persist config back to localStorage
+           ------------------------------------------------- */
+        function persistConfig() {
+            localStorage.setItem('segmentConfig', JSON.stringify(SEGMENT_CONFIG));
+            updateHiddenJSON();
+        }
+
+        /* -------------------------------------------------
+           Update the hidden JSON input for script.js to read
+           ------------------------------------------------- */
+        function updateHiddenJSON() {
+            const jsonInput = document.getElementById('segmentDataJSON');
+            if (jsonInput) {
+                jsonInput.value = JSON.stringify(SEGMENT_CONFIG);
+            }
+        }
+
+        /* -------------------------------------------------
+           Build the editable UI for each segment
+           ------------------------------------------------- */
+        function buildConfigEditor() {
+            const container = document.getElementById('segmentConfigEditor');
+            container.innerHTML = '';
+
+            // Use table for neater alignment
+            const table = document.createElement('table');
+            table.style.width = '100%';
+            table.style.borderCollapse = 'collapse';
+            table.style.marginTop = '8px';
+
+            // Header Row
+            const thead = document.createElement('thead');
+            thead.innerHTML = `
+                <tr style="text-align:left; border-bottom:1px solid #4a5568;">
+                    <th style="padding:8px; width:20%;">Segment</th>
+                    <th style="padding:8px; width:15%;">Percent %</th>
+                    <th style="padding:8px; width:20%;">Extra Rolls</th>
+                    <th style="padding:8px; width:15%;">Explode</th>
+                    <th style="padding:8px; width:20%;">Prize $</th>
+                </tr>
+            `;
+            table.appendChild(thead);
+
+            const tbody = document.createElement('tbody');
+
+            Object.entries(SEGMENT_CONFIG).forEach(([key, cfg]) => {
+                const tr = document.createElement('tr');
+                tr.style.height = '45px';
+                tr.style.borderBottom = '1px solid #2d3748';
+
+                // Label (Editable Name?) - Keeping static for now as keys are static
+                const tdLabel = document.createElement('td');
+                tdLabel.style.padding = '4px 8px';
+                tdLabel.textContent = cfg.label;
+                tdLabel.style.fontWeight = '600';
+                tr.appendChild(tdLabel);
+
+                // Percent Input
+                const tdPercent = document.createElement('td');
+                tdPercent.style.padding = '4px 8px';
+                const percentInput = document.createElement('input');
+                percentInput.type = 'number';
+                percentInput.min = 0;
+                percentInput.max = 100;
+                percentInput.value = cfg.percent;
+                percentInput.style.width = '50px';
+                percentInput.onchange = () => {
+                    SEGMENT_CONFIG[key].percent = parseFloat(percentInput.value) || 0;
+                    persistConfig();
+                };
+                tdPercent.appendChild(percentInput);
+                tr.appendChild(tdPercent);
+
+                // Extra Rolls
+                const tdRolls = document.createElement('td');
+                tdRolls.style.padding = '4px 8px';
+                const extraInput = document.createElement('input');
+                extraInput.type = 'number';
+                extraInput.min = 0;
+                extraInput.max = 5;
+                extraInput.value = cfg.extraRolls;
+                extraInput.style.width = '50px';
+                extraInput.onchange = () => {
+                    SEGMENT_CONFIG[key].extraRolls = parseInt(extraInput.value, 10) || 0;
+                    persistConfig();
+                };
+                tdRolls.appendChild(extraInput);
+                tr.appendChild(tdRolls);
+
+                // Explode
+                const tdExplode = document.createElement('td');
+                tdExplode.style.padding = '4px 8px';
+                const explodeInput = document.createElement('input');
+                explodeInput.type = 'checkbox';
+                explodeInput.checked = cfg.explode;
+                explodeInput.onchange = () => {
+                    SEGMENT_CONFIG[key].explode = explodeInput.checked;
+                    persistConfig();
+                };
+                tdExplode.appendChild(explodeInput);
+                tr.appendChild(tdExplode);
+
+                // Prize Cost
+                const tdCost = document.createElement('td');
+                tdCost.style.padding = '4px 8px';
+                const costInput = document.createElement('input');
+                costInput.type = 'number';
+                costInput.min = 0;
+                costInput.step = 0.01;
+                costInput.value = cfg.prizeCost;
+                costInput.style.width = '60px';
+                costInput.onchange = () => {
+                    SEGMENT_CONFIG[key].prizeCost = parseFloat(costInput.value) || 0;
+                    persistConfig();
+                };
+                tdCost.appendChild(costInput);
+                tr.appendChild(tdCost);
+
+                tbody.appendChild(tr);
+            });
+
+            table.appendChild(tbody);
+            container.appendChild(table);
+
+            // Initial update of hidden JSON
+            updateHiddenJSON();
+        }
+
+        // Removed applySegmentSettings as we are now using the whole group
+
+        /* -------------------------------------------------
+           Save current Defaults
+           ------------------------------------------------- */
+        function saveCurrentAsDefaults() {
+            // 1. Save Global Inputs
+            const defaults = {
+                rollsPerSession: document.getElementById('rollsPerSession').value,
+                sessionsPerDay: document.getElementById('sessionsPerDay').value,
+                numUsers: document.getElementById('numUsers').value,
+                participation: document.getElementById('participation').value,
+                // explode: document.getElementById('doubleSix').checked, // Removed as individual segments handle this
+                // leaderboard: document.getElementById('leaderboard').checked, // Keep
+                seed: document.getElementById('seed').value
+            };
+            localStorage.setItem('globalDefaults', JSON.stringify(defaults));
+
+            // 2. Save Segment Config
+            persistConfig();
+
+            alert('✅ Settings Saved!\n\nYour Inputs and Segment configurations (including percentages) are now stored as the default.');
+        }
+
+        function resetToFactory() {
+            if (confirm('Reset ALL settings (Inputs and Segments) to original factory values?')) {
+                localStorage.removeItem('globalDefaults');
+                localStorage.removeItem('segmentConfig');
+                location.reload();
+            }
+        }
+
+        function loadSavedDefaults() {
+            const stored = localStorage.getItem('globalDefaults');
+            if (stored) {
+                const d = JSON.parse(stored);
+                if (d.rollsPerSession) document.getElementById('rollsPerSession').value = d.rollsPerSession;
+                if (d.sessionsPerDay) document.getElementById('sessionsPerDay').value = d.sessionsPerDay;
+                if (d.numUsers) document.getElementById('numUsers').value = d.numUsers;
+                if (d.participation) {
+                    document.getElementById('participation').value = d.participation;
+                    document.getElementById('partVal').textContent = d.participation + '%';
+                }
+                // Explode is now per-segment, so we ignore the global default
+                if (d.seed) document.getElementById('seed').value = d.seed;
+            }
+        }
+
+        /* -------------------------------------------------
+           Initialise everything on page load
+           ------------------------------------------------- */
+        document.addEventListener('DOMContentLoaded', () => {
+            loadSavedDefaults();
+            buildConfigEditor();          // draw the table
+
+            const saveBtn = document.getElementById('saveDefaults');
+            if (saveBtn) saveBtn.addEventListener('click', saveCurrentAsDefaults);
+
+            const resetBtn = document.getElementById('resetDefaults');
+            if (resetBtn) resetBtn.addEventListener('click', resetToFactory);
+        });
+    </script>
+</body>
+
+</html>
